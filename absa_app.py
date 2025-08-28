@@ -8,11 +8,59 @@ import json
 import requests # For making API calls
 import re
 import time
+from collections import defaultdict
 
 # --- IMPORTANT: PASTE YOUR API KEY HERE ---
 # WARNING: Hardcoding the key is not a secure practice for public apps.
 # For production, you should use Streamlit's secrets management.
 API_KEY = "AIzaSyBFyP4nIF2KKtCpUewiiEDPjoR_qnXjmeg"  # <--- **REPLACE THIS WITH YOUR VALID API KEY**
+
+# --- Helper function to reconstruct clean text from PDF words ---
+def get_clean_text(pdf_document):
+    """
+    Extracts text from a PDF page by reconstructing lines from individual words
+    based on their coordinates. This handles misaligned text better than get_text().
+    It groups words into horizontal 'bands' to account for slight vertical shifts.
+    """
+    full_text = ""
+    for page_num in range(len(pdf_document)):
+        page = pdf_document.load_page(page_num)
+        
+        # Get all words with their bounding boxes
+        words = page.get_text("words")
+        if not words:
+            continue
+            
+        # Sort words by their y-coordinate and then x-coordinate
+        words.sort(key=lambda w: (w[3], w[0]))
+        
+        lines = []
+        current_line_y = -1
+        current_line_words = []
+        
+        # Reconstruct lines by checking if words are within a horizontal band
+        Y_BAND_TOLERANCE = 5 # A few pixels of tolerance for vertical alignment
+        
+        for word in words:
+            y_coord = word[3]
+            if current_line_y == -1 or abs(y_coord - current_line_y) < Y_BAND_TOLERANCE:
+                # This word is on the same line as the previous ones
+                current_line_words.append(word[4])
+                if current_line_y == -1:
+                    current_line_y = y_coord
+            else:
+                # New line detected
+                lines.append(" ".join(current_line_words))
+                current_line_words = [word[4]]
+                current_line_y = y_coord
+        
+        # Add the last line
+        if current_line_words:
+            lines.append(" ".join(current_line_words))
+
+        full_text += "\n".join(lines) + "\n"
+            
+    return full_text
 
 # --- Function to interact with the AI ---
 def process_with_ai(pdf_text):
@@ -32,17 +80,14 @@ def process_with_ai(pdf_text):
     You are a highly specific and strict bank statement transaction parser. Your task is to extract transactions
     from the following ABSA bank statement text.
 
-    The text is very messy. Each transaction might span multiple lines, and the amount columns
-    (debit and credit) are often misaligned. You must use a very strict approach to identify transactions.
+    The text has been pre-processed and is now mostly one transaction per line. You must use a very strict approach to identify transactions.
 
-    A transaction is a block of text that starts with a date in the format 'DD/MM/YYYY' or 'D/MM/YYYY'.
+    A transaction is a line of text that starts with a date in the format 'DD/MM/YYYY' or 'D/MM/YYYY'.
     Ignore any lines that do not start with a date.
     For each transaction, extract the date, a concise description, and the amount.
     The amount must be a number: positive for credits and negative for debits.
-    A credit amount will be a number in the "Credit Amount" column and will be positive.
-    A debit amount will be a number in the "Debit Amount" column, and it should be converted to a negative number.
-    Note that debit amounts may sometimes be followed by a minus sign, or be in a column without a minus sign. Always convert them to negative numbers.
-
+    A credit amount will be a number that is not explicitly marked as a debit.
+    A debit amount will be a number followed by a minus sign or in a column indicating debit. Always convert them to negative numbers.
     The final output must be a clean JSON array of objects, with no extra text or explanation.
 
     Fields to extract for each transaction object:
@@ -98,7 +143,7 @@ def process_with_ai(pdf_text):
                 api_url,
                 headers={'Content-Type': 'application/json'},
                 json=payload,
-                timeout=30 # Set a timeout
+                timeout=60 # Set a timeout
             )
             response.raise_for_status() # This will raise an exception for 4xx or 5xx status codes
             
@@ -159,10 +204,7 @@ def main():
                         pdf_bytes = uploaded_file.getvalue()
                         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
                         
-                        full_text = ""
-                        for page_num in range(len(pdf_document)):
-                            page = pdf_document.load_page(page_num)
-                            full_text += page.get_text()
+                        full_text = get_clean_text(pdf_document)
                         
                         pdf_document.close()
                         
@@ -195,4 +237,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
