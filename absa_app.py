@@ -14,29 +14,29 @@ st.set_page_config(page_title="ABSA PDF to CSV Converter", layout="centered")
 # --- Function to parse ABSA PDFs using a rule-based approach ---
 def parse_absa_pdf(pdf_text):
     """
-    Parses transactions from ABSA PDFs using regular expressions.
-    This approach is more robust for inconsistent formats.
+    Parses transactions from ABSA PDFs using a more robust set of regular expressions.
+    This approach is designed to handle the inconsistent formatting of this specific PDF.
     """
-    st.info("Using rule-based parser for ABSA file.")
+    st.info("Using enhanced rule-based parser for ABSA file.")
     transactions = []
     
-    # Define a regex pattern to find transaction lines. This pattern looks for a date,
-    # followed by a description, and then optional debit and credit amounts.
-    # The pattern is complex to handle the inconsistent formatting.
-    # Example: "29/04/2021 T 141.43 Ibank Payment To Settlement Absa Bank Simple Pay Payroll ,,,"
-    # The text is flattened, so we look for dates followed by patterns of text and numbers.
-    
-    # This regex looks for a date, followed by text (description), and then two numbers,
-    # which represent the debit and credit columns.
-    # The ?P<name> syntax is used to create named capture groups for easier access.
-    # The text is flattened and has many spaces, so we use '\s+' to match one or more spaces.
-    pattern = re.compile(
-        r'(\d{1,2}/\d{1,2}/\d{4})\s+'  # Date (e.g., 29/04/2021)
-        r'(.+?)\s+'  # Description (non-greedy to stop before the next number)
-        r'([\d\s,.]+\s+)?'  # Optional charge or extra text
-        r'([\d\s,.-]+)\s*'  # Debit or Credit Amount (can have a '-' sign)
-        r'(?P<credit>[\d\s,.]*)?' # Optional second number, usually the credit amount
-        r'([\d\s,.]+\s*)?' # Optional charge
+    # This pattern is more targeted. It looks for a date at the beginning of a line,
+    # then captures the description and the two amount columns (debit and credit).
+    # The regex is now more lenient with whitespace and line breaks.
+    # It accounts for the "Acb Credit" and "Ibank Payment To" patterns.
+    absa_pattern = re.compile(
+        r'(\d{1,2}/\d{1,2}/\d{4})\s+' # Date at the start of the line
+        r'(.+?)' # Non-greedy description
+        r'(\s+[\d\s,.-]+)\s*$' # Debit or Credit amount at the end of the line
+    )
+
+    # A more specific pattern to capture the debit and credit columns when they are separated.
+    absa_pattern_split = re.compile(
+        r'(\d{1,2}/\d{1,2}/\d{4})' # Date
+        r'(.+?)' # Description
+        r'(\d{1,2}/\d{1,2}/\d{4})?' # Optional second date if the line wraps
+        r'([\d\s,.-]+)?\s*' # Optional charge or debit amount
+        r'([\d\s,.-]+)\s*$' # Credit amount at the end
     )
     
     # Split the text into lines to process each transaction individually.
@@ -49,37 +49,55 @@ def parse_absa_pdf(pdf_text):
         # Remove extra spaces and make the line more manageable.
         line = re.sub(r'\s+', ' ', line).strip()
         
-        match = pattern.search(line)
+        # First, try to match the split debit/credit pattern
+        match = absa_pattern_split.search(line)
         if match:
             try:
-                # Get the captured groups from the regex match.
                 date_str = match.group(1).strip()
                 description = match.group(2).strip()
-                
-                # Check for both debit and credit amounts to determine the sign.
                 debit_str = match.group(4)
-                credit_str = match.group('credit')
+                credit_str = match.group(5)
                 
                 amount = 0.0
                 if credit_str and credit_str.strip() != "":
                     amount = float(credit_str.replace(" ", "").replace(",", ""))
                 elif debit_str and debit_str.strip() != "":
-                    # The debit amount will sometimes be preceded by a '-'.
                     amount = -abs(float(debit_str.replace(" ", "").replace(",", "").replace("-", "")))
                 else:
                     continue # Skip transactions without a clear amount
 
-                # Append the parsed transaction to the list.
                 transactions.append({
                     "date": pd.to_datetime(date_str, format="%d/%m/%Y").strftime("%Y-%m-%d"),
                     "description": description,
                     "amount": amount
                 })
             except (ValueError, IndexError):
-                # If a line doesn't match the pattern or has a parsing error, skip it.
                 continue
 
-    st.success(f"Found {len(transactions)} transactions with rule-based parser.")
+    # If no transactions found with the split pattern, try the combined pattern.
+    if not transactions:
+        for line in lines:
+            line = re.sub(r'\s+', ' ', line).strip()
+            match = absa_pattern.search(line)
+            if match:
+                try:
+                    date_str = match.group(1).strip()
+                    description = match.group(2).strip()
+                    amount_str = match.group(3).strip()
+                    
+                    amount = float(amount_str.replace(" ", "").replace(",", "").replace("-", ""))
+                    if "-" in amount_str:
+                        amount = -abs(amount)
+                    
+                    transactions.append({
+                        "date": pd.to_datetime(date_str, format="%d/%m/%Y").strftime("%Y-%m-%d"),
+                        "description": description,
+                        "amount": amount
+                    })
+                except (ValueError, IndexError):
+                    continue
+
+    st.success(f"Found {len(transactions)} transactions with enhanced rule-based parser.")
     return transactions
 
 # --- Main App UI Layout ---
@@ -159,3 +177,4 @@ def main():
 # Run the main function when the script is executed.
 if __name__ == "__main__":
     main()
+
