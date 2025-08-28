@@ -91,10 +91,8 @@ def process_with_ai(pdf_text):
     # This URL is the entry point for the AI model.
     api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
     
-    # NOTE: The API key has been hardcoded here for your convenience.
-    # For a production application, it is HIGHLY recommended to use
-    # Streamlit's secrets management for security.
-    api_key = "AIzaSyB6ldpXkgPsfI9xU79_QZKGw6SDwDmVgWM"
+    # The API key is now set as an empty string. The runtime environment will provide it.
+    api_key = ""
 
     try:
         # We'll now use the standard requests library which works reliably with Streamlit.
