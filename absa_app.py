@@ -91,9 +91,10 @@ def process_with_ai(pdf_text):
     # This URL is the entry point for the AI model.
     api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
     
-    # We retrieve the API key securely from Streamlit's secrets.
-    # The key is named 'api_key' under the 'general' section in the secrets.toml file.
-    api_key = st.secrets["general"]["api_key"]
+    # NOTE: The API key has been hardcoded here for your convenience.
+    # For a production application, it is HIGHLY recommended to use
+    # Streamlit's secrets management for security.
+    api_key = "AIzaSyB6ldpXkgPsfI9xU79_QZKGw6SDwDmVgWM"
 
     try:
         # We'll now use the standard requests library which works reliably with Streamlit.
@@ -206,6 +207,3 @@ def main():
 # Run the main function when the script is executed.
 if __name__ == "__main__":
     main()
-
-
-
