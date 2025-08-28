@@ -14,88 +14,51 @@ st.set_page_config(page_title="ABSA PDF to CSV Converter", layout="centered")
 # --- Function to parse ABSA PDFs using a rule-based approach ---
 def parse_absa_pdf(pdf_text):
     """
-    Parses transactions from ABSA PDFs using a more robust set of regular expressions.
-    This approach is designed to handle the inconsistent formatting of this specific PDF.
+    Parses transactions from ABSA PDFs using a robust, multi-line regular expression.
+    This is designed to handle the highly inconsistent formatting of this specific PDF.
     """
-    st.info("Using enhanced rule-based parser for ABSA file.")
+    st.info("Using multi-line rule-based parser for ABSA file.")
     transactions = []
     
-    # This pattern is more targeted. It looks for a date at the beginning of a line,
-    # then captures the description and the two amount columns (debit and credit).
-    # The regex is now more lenient with whitespace and line breaks.
-    # It accounts for the "Acb Credit" and "Ibank Payment To" patterns.
-    absa_pattern = re.compile(
-        r'(\d{1,2}/\d{1,2}/\d{4})\s+' # Date at the start of the line
-        r'(.+?)' # Non-greedy description
-        r'(\s+[\d\s,.-]+)\s*$' # Debit or Credit amount at the end of the line
-    )
-
-    # A more specific pattern to capture the debit and credit columns when they are separated.
-    absa_pattern_split = re.compile(
-        r'(\d{1,2}/\d{1,2}/\d{4})' # Date
-        r'(.+?)' # Description
-        r'(\d{1,2}/\d{1,2}/\d{4})?' # Optional second date if the line wraps
-        r'([\d\s,.-]+)?\s*' # Optional charge or debit amount
-        r'([\d\s,.-]+)\s*$' # Credit amount at the end
+    # This pattern is more forgiving and looks for a transaction across multiple lines.
+    # The re.DOTALL flag is crucial to make '.' match newlines.
+    absa_pattern_multiline = re.compile(
+        r'(\d{1,2}/\d{1,2}/\d{4})\s' # Date
+        r'(.*?)' # Non-greedy description, including newlines
+        r'([\d\s,.-]+)\s*$' # Matches the amount at the end of a block
     )
     
-    # Split the text into lines to process each transaction individually.
-    lines = pdf_text.split("\n")
+    # Clean the entire text block first.
+    # The original PDF has many line breaks that mess up the extraction.
+    cleaned_text = re.sub(r'[\r\n]+', ' ', pdf_text)
+
+    # Re-introduce newlines in a more consistent way to define transaction blocks.
+    # This is a guess based on the PDF's layout where a balance often signals a new line.
+    cleaned_text = re.sub(r'(\s\d{1,3}(,\d{3})*(\.\d{2}))', r'\n\1', cleaned_text)
     
-    for line in lines:
-        if "statement no" in line.lower() or "transaction description" in line.lower() or "page" in line.lower():
-            continue # Skip headers and other non-transaction lines
+    # Now, try to match the pattern on the cleaned text.
+    matches = absa_pattern_multiline.findall(cleaned_text)
 
-        # Remove extra spaces and make the line more manageable.
-        line = re.sub(r'\s+', ' ', line).strip()
-        
-        # First, try to match the split debit/credit pattern
-        match = absa_pattern_split.search(line)
-        if match:
-            try:
-                date_str = match.group(1).strip()
-                description = match.group(2).strip()
-                debit_str = match.group(4)
-                credit_str = match.group(5)
-                
-                amount = 0.0
-                if credit_str and credit_str.strip() != "":
-                    amount = float(credit_str.replace(" ", "").replace(",", ""))
-                elif debit_str and debit_str.strip() != "":
-                    amount = -abs(float(debit_str.replace(" ", "").replace(",", "").replace("-", "")))
-                else:
-                    continue # Skip transactions without a clear amount
+    for match in matches:
+        try:
+            date_str = match[0].strip()
+            description = match[1].strip()
+            amount_str = match[2].strip()
 
-                transactions.append({
-                    "date": pd.to_datetime(date_str, format="%d/%m/%Y").strftime("%Y-%m-%d"),
-                    "description": description,
-                    "amount": amount
-                })
-            except (ValueError, IndexError):
-                continue
-
-    # If no transactions found with the split pattern, try the combined pattern.
-    if not transactions:
-        for line in lines:
-            line = re.sub(r'\s+', ' ', line).strip()
-            match = absa_pattern.search(line)
-            if match:
-                try:
-                    date_str = match.group(1).strip()
-                    description = match.group(2).strip()
-                    amount_str = match.group(3).strip()
-                    
-                    amount = float(amount_str.replace(" ", "").replace(",", "").replace("-", ""))
-                    if "-" in amount_str:
-                        amount = -abs(amount)
-                    
-                    transactions.append({
-                        "date": pd.to_datetime(date_str, format="%d/%m/%Y").strftime("%Y-%m-%d"),
-                        "description": description,
-                        "amount": amount
-                    })
-                except (ValueError, IndexError):
-                    continue
+            amount = float(amount_str.replace(" ", "").replace(",", "").replace("-", ""))
+            
+            # Since the amounts are in separate columns, we need to determine the sign.
+            # We look for keywords like "Debit" or "Charge" to identify negative amounts.
+            if "Debit Amount" in cleaned_text or "Charge" in description or "-" in amount_str:
+                 amount = -abs(amount)
+            
+            transactions.append({
+                "date": pd.to_datetime(date_str, format="%d/%m/%Y").strftime("%Y-%m-%d"),
+                "description": description,
+                "amount": amount
+            })
+        except (ValueError, IndexError):
+            continue
 
     st.success(f"Found {len(transactions)} transactions with enhanced rule-based parser.")
     return transactions
@@ -177,4 +140,5 @@ def main():
 # Run the main function when the script is executed.
 if __name__ == "__main__":
     main()
+
 
