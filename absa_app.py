@@ -7,6 +7,7 @@ import fitz  # PyMuPDF for PDF text extraction
 import json
 import requests # For making API calls
 import re
+import time
 
 # --- IMPORTANT: PASTE YOUR API KEY HERE ---
 # WARNING: Hardcoding the key is not a secure practice for public apps.
@@ -34,12 +35,13 @@ def process_with_ai(pdf_text):
     The text is very messy. Each transaction might span multiple lines, and the amount columns
     (debit and credit) are often misaligned. You must use a very strict approach to identify transactions.
 
-    A transaction is a line of text that starts with a date in the format 'DD/MM/YYYY' or 'D/MM/YYYY'.
+    A transaction is a block of text that starts with a date in the format 'DD/MM/YYYY' or 'D/MM/YYYY'.
     Ignore any lines that do not start with a date.
     For each transaction, extract the date, a concise description, and the amount.
     The amount must be a number: positive for credits and negative for debits.
-    A credit amount will be a number in a credit column and will be positive.
-    A debit amount will either be a negative number or a positive number in a debit column, and it should be converted to a negative number.
+    A credit amount will be a number in the "Credit Amount" column and will be positive.
+    A debit amount will be a number in the "Debit Amount" column, and it should be converted to a negative number.
+    Note that debit amounts may sometimes be followed by a minus sign, or be in a column without a minus sign. Always convert them to negative numbers.
 
     The final output must be a clean JSON array of objects, with no extra text or explanation.
 
@@ -48,11 +50,12 @@ def process_with_ai(pdf_text):
     - 'description': A concise description of the transaction.
     - 'amount': The transaction amount as a number (e.g., 100.50 or -50.00).
 
-    Example of expected output format:
+    Example of expected output format based on a sample of a similar bank statement text:
     [
-      {{ "date": "2021-04-29", "description": "Acb Credit Yoco B5ccc7 Yoco", "amount": 5421.42 }},
+      {{ "date": "2021-04-29", "description": "Acb Credit Settlement Yoco B5ccc7 Yoco", "amount": 5421.42 }},
       {{ "date": "2021-04-30", "description": "Settlement Acb Credit Yoco Yoco B5ccc7", "amount": 3922.64 }},
-      {{ "date": "2021-05-01", "description": "Admin Charge Headoffice See Charge Statement Detail", "amount": -83.00 }}
+      {{ "date": "2021-05-01", "description": "Admin Charge Headoffice See Charge Statement Detail", "amount": -83.00 }},
+      {{ "date": "2021-05-01", "description": "Transaction Charge Headoffice See Charge Statement Detail", "amount": -55.55 }}
     ]
 
     Bank Statement Text:
@@ -88,30 +91,47 @@ def process_with_ai(pdf_text):
     
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={API_KEY}"
     
-    try:
-        response = requests.post(
-            api_url,
-            headers={'Content-Type': 'application/json'},
-            json=payload
-        )
-        response.raise_for_status() # This will raise an exception for 4xx or 5xx status codes
-        
-        api_response_json = response.json()
-        if api_response_json and api_response_json.get('candidates'):
-            raw_text = api_response_json['candidates'][0]['content']['parts'][0]['text']
-            transactions = json.loads(raw_text)
-            return transactions
-        else:
-            st.error("AI processing failed. The API response was not in the expected format.")
-            st.json(api_response_json) # Display the full response for debugging
+    # Use exponential backoff for API calls
+    for i in range(3):
+        try:
+            response = requests.post(
+                api_url,
+                headers={'Content-Type': 'application/json'},
+                json=payload,
+                timeout=30 # Set a timeout
+            )
+            response.raise_for_status() # This will raise an exception for 4xx or 5xx status codes
+            
+            api_response_json = response.json()
+            if api_response_json and api_response_json.get('candidates'):
+                raw_text = api_response_json['candidates'][0]['content']['parts'][0]['text']
+                # The model can sometimes return the JSON with a code block, so we clean it.
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text.strip("`json\n").strip()
+                transactions = json.loads(raw_text)
+                return transactions
+            else:
+                st.error("AI processing failed. The API response was not in the expected format.")
+                st.json(api_response_json) # Display the full response for debugging
+                return []
+        except requests.exceptions.HTTPError as errh:
+            st.error(f"HTTP Error: {errh}")
+            st.error("This is likely a problem with your API key. Please check its validity and permissions.")
             return []
-    except requests.exceptions.HTTPError as errh:
-        st.error(f"HTTP Error: {errh}")
-        st.error("This is likely a problem with your API key. Please check its validity and permissions.")
-        return []
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
-        return []
+        except requests.exceptions.RequestException as e:
+            st.error(f"An unexpected error occurred during API call: {e}")
+            time.sleep(2 ** i) # Exponential backoff
+        except json.JSONDecodeError as e:
+            st.error(f"Failed to parse JSON response from AI: {e}")
+            st.text(f"Raw response: {raw_text}")
+            return []
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
+            return []
+    
+    st.error("API call failed after multiple retries.")
+    return []
+
 
 # --- Main App UI Layout ---
 def main():
