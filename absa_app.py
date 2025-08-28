@@ -1,36 +1,29 @@
-# absa_converter_rewritten_v2.py
+# absa_converter_rewritten_v3.py
 
 # Import necessary libraries.
 import streamlit as st
 import pandas as pd
 import fitz  # PyMuPDF for PDF text extraction
 import json
-import base64
-import io
 import requests # For making API calls
 import re
 
-# --- IMPORTANT: PLACE YOUR API KEY HERE ---
+# --- IMPORTANT: PASTE YOUR API KEY HERE ---
 # WARNING: Hardcoding the key is not a secure practice for public apps.
-# However, it is done here to ensure the app works for you, bypassing local file issues.
 # For production, you should use Streamlit's secrets management.
-API_KEY = "AIzaSyA41FebmB_P3lsTaNmjXmcBU2c56m3iykw"  # <-- **PASTE YOUR API KEY HERE**
-
-# --- Main App Configuration ---
-st.set_page_config(page_title="ABSA PDF to CSV Converter", layout="centered")
+API_KEY = "AIzaSyBFyP4nIF2KKtCpUewiiEDPjoR_qnXjmeg"  # <--- **REPLACE THIS WITH YOUR VALID API KEY**
 
 # --- Function to interact with the AI ---
 def process_with_ai(pdf_text):
     """
     Sends the extracted PDF text to the Gemini API to get structured transaction data.
-    This function uses a highly specific and strict prompt to guide the AI,
-    making it more robust for messy documents.
+    This function uses a highly specific and strict prompt to guide the AI.
     """
-    st.info("Using strict AI-based parser.")
+    st.info("Attempting to connect to the Gemini API...")
     
-    # Check if the API key is provided
+    # Check if a valid API key has been provided.
     if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
-        st.error("Please enter a valid API key in the code before running the app.")
+        st.error("Error: API Key is missing. Please add your key to the API_KEY variable in the code.")
         return []
 
     # The prompt instructs the AI on how to parse the messy PDF text.
@@ -54,6 +47,13 @@ def process_with_ai(pdf_text):
     - 'date': The transaction date in 'YYYY-MM-DD' format.
     - 'description': A concise description of the transaction.
     - 'amount': The transaction amount as a number (e.g., 100.50 or -50.00).
+
+    Example of expected output format:
+    [
+      {{ "date": "2021-04-29", "description": "Acb Credit Yoco B5ccc7 Yoco", "amount": 5421.42 }},
+      {{ "date": "2021-04-30", "description": "Settlement Acb Credit Yoco Yoco B5ccc7", "amount": 3922.64 }},
+      {{ "date": "2021-05-01", "description": "Admin Charge Headoffice See Charge Statement Detail", "amount": -83.00 }}
+    ]
 
     Bank Statement Text:
     {pdf_text}
@@ -94,7 +94,7 @@ def process_with_ai(pdf_text):
             headers={'Content-Type': 'application/json'},
             json=payload
         )
-        response.raise_for_status()
+        response.raise_for_status() # This will raise an exception for 4xx or 5xx status codes
         
         api_response_json = response.json()
         if api_response_json and api_response_json.get('candidates'):
@@ -102,13 +102,15 @@ def process_with_ai(pdf_text):
             transactions = json.loads(raw_text)
             return transactions
         else:
-            st.error("AI processing failed. Please try a different PDF or contact support.")
+            st.error("AI processing failed. The API response was not in the expected format.")
+            st.json(api_response_json) # Display the full response for debugging
             return []
     except requests.exceptions.HTTPError as errh:
         st.error(f"HTTP Error: {errh}")
+        st.error("This is likely a problem with your API key. Please check its validity and permissions.")
         return []
     except Exception as e:
-        st.error(f"An unexpected error occurred during API processing: {e}")
+        st.error(f"An unexpected error occurred: {e}")
         return []
 
 # --- Main App UI Layout ---
@@ -119,8 +121,6 @@ def main():
     st.title("📄 ABSA PDF to CSV Converter (AI)")
     st.markdown("""
     **This app is specifically for converting ABSA bank statement PDFs to a clean CSV file using a highly-tuned AI parser.**
-    
-    This tool is designed to handle the unique formatting of ABSA statements with a robust AI.
     """)
 
     uploaded_files = st.file_uploader(
