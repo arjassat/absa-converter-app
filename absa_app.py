@@ -1,76 +1,144 @@
-# absa_app.py
+# absa_strict_ai_app.py
 
 # Import necessary libraries. We'll use Streamlit for the app interface,
 # pandas to create the CSV, and PyMuPDF to read the PDF.
 import streamlit as st
 import pandas as pd
 import fitz  # This is the PyMuPDF library
+import json
+import base64
+import io
+import requests # We will use the standard requests library for API calls
+import os # Import the os module to use environment variables
 import re # We'll use regular expressions for text cleaning
 
 # --- Main App Configuration ---
 # Set the title and a brief description for your app.
-st.set_page_config(page_title="ABSA PDF to CSV Converter", layout="centered")
+st.set_page_config(page_title="ABSA PDF to CSV Converter (AI)", layout="centered")
 
-# --- Function to parse ABSA PDFs using a rule-based approach ---
-def parse_absa_pdf(pdf_text):
+# --- Function to interact with the AI ---
+def process_with_ai(pdf_text):
     """
-    Parses transactions from ABSA PDFs using a robust, multi-line regular expression.
-    This is designed to handle the highly inconsistent formatting of this specific PDF.
+    Sends the extracted PDF text to the Gemini API to get structured transaction data.
+    This function uses a highly specific and strict prompt to guide the AI,
+    making it more robust for messy documents.
     """
-    st.info("Using simplified rule-based parser for ABSA file.")
-    transactions = []
-    
-    # This pattern is more forgiving and looks for a transaction across multiple lines.
-    # The re.DOTALL and re.MULTILINE flags are crucial to make '.' and '^' match newlines.
-    # We look for a date at the beginning of a line, a description, and then a
-    # debit amount and/or a credit amount.
-    absa_pattern = re.compile(
-        r'^\s*(\d{1,2}/\d{1,2}/\d{4})\s' # Date at the start of a line
-        r'(.+?)' # Description, non-greedy
-        r'(\s*[\d\s,.-]+)?' # Optional debit amount
-        r'(\s*[\d\s,.-]+)\s*$' # Final amount at the end of the line
-        , re.MULTILINE | re.DOTALL
-    )
-    
-    # Now, try to find all matches on the entire PDF text.
-    matches = absa_pattern.findall(pdf_text)
+    st.info("Using strict AI-based parser.")
+    # The prompt is a set of instructions for the AI.
+    # It tells the AI exactly what to look for and how to format the output.
+    prompt = f"""
+    You are a highly specific and strict bank statement transaction parser. Your task is to extract transactions
+    from the following bank statement text. This text is from an ABSA bank.
 
-    for match in matches:
-        try:
-            date_str = match[0].strip()
-            description = match[1].strip()
-            debit_str = match[2].strip() if match[2] else None
-            credit_str = match[3].strip() if match[3] else None
-            
-            amount = 0.0
-            if credit_str:
-                amount = float(credit_str.replace(" ", "").replace(",", ""))
-            elif debit_str:
-                amount = -abs(float(debit_str.replace(" ", "").replace(",", "")))
-            else:
-                continue
-            
-            transactions.append({
-                "date": pd.to_datetime(date_str, format="%d/%m/%Y").strftime("%Y-%m-%d"),
-                "description": description,
-                "amount": amount
-            })
-        except (ValueError, IndexError):
-            continue
+    The text is very messy. Each transaction might span multiple lines, and the amount columns
+    (debit and credit) are often misaligned or mixed with the description. You must use a very strict
+    approach to identify transactions.
 
-    st.success(f"Found {len(transactions)} transactions with simplified rule-based parser.")
-    return transactions
+    A transaction is a line of text that starts with a date in the format 'DD/MM/YYYY'.
+    Ignore any lines that do not start with a date, such as headers, footers, or account summaries.
+    For each transaction, extract the date, description, and amount.
+    The amount must be a number: positive for credits and negative for debits.
+    A credit amount will be a number in a credit column (often a final column) and will be positive.
+    A debit amount will either be a negative number or a positive number in a debit column, and it should be converted to a negative number.
+
+    The final output must be a clean JSON array of objects, with no extra text or explanation.
+
+    Fields to extract for each transaction object:
+    - 'date': The transaction date in 'YYYY-MM-DD' format.
+    - 'description': A concise description of the transaction.
+    - 'amount': The transaction amount as a number (e.g., 100.50 or -50.00).
+
+    Example of expected output format:
+    [
+      {{ "date": "2021-04-29", "description": "Acb Credit Yoco B5ccc7 Yoco", "amount": 5421.42 }},
+      {{ "date": "2021-04-30", "description": "Settlement Acb Credit Yoco Yoco B5ccc7", "amount": 3922.64 }},
+      {{ "date": "2021-05-01", "description": "Admin Charge Headoffice See Charge Statement Detail", "amount": -83.00 }}
+    ]
+
+    Bank Statement Text:
+    {pdf_text}
+    """
+
+    # --- API Call to Gemini ---
+    # This is where the AI processing happens. We configure it to return JSON directly.
+    # The schema is now updated to only include date, description, and amount.
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "date": {"type": "string"},
+                        "description": {"type": "string"},
+                        "amount": {"type": "number"}
+                    },
+                    "required": ["date", "description", "amount"]
+                }
+            }
+        }
+    }
+
+    # This URL is the entry point for the AI model.
+    api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
+    
+    # We retrieve the API key securely from Streamlit's secrets.
+    # The key is named 'api_key' under the 'general' section in the secrets.toml file.
+    api_key = st.secrets["general"]["api_key"]
+
+    try:
+        # We'll now use the standard requests library which works reliably with Streamlit.
+        response = requests.post(
+            api_url,
+            headers={'Content-Type': 'application/json'},
+            params={'key': api_key},
+            json=payload
+        )
+        response.raise_for_status() # Raise an exception for bad status codes
+        
+        # Check if the API response is valid and contains content.
+        api_response_json = response.json()
+        if api_response_json and api_response_json.get('candidates') and api_response_json['candidates'][0].get('content'):
+            raw_text = api_response_json['candidates'][0]['content']['parts'][0]['text']
+            # Parse the JSON string into a Python list of dictionaries.
+            transactions = json.loads(raw_text)
+            return transactions
+        else:
+            st.error("AI processing failed. Please try a different PDF or contact support.")
+            st.json(api_response_json) # Displaying the raw response can help with debugging
+            return []
+    except requests.exceptions.HTTPError as errh:
+        st.error(f"HTTP Error: {errh}")
+        return []
+    except requests.exceptions.RequestException as err:
+        st.error(f"An error occurred during API call: {err}")
+        return []
+    except json.JSONDecodeError as err:
+        st.error(f"Failed to decode JSON response from AI: {err}")
+        return []
+    except Exception as e:
+        st.error(f"An unexpected error occurred during AI processing: {e}")
+        return []
 
 # --- Main App UI Layout ---
 def main():
     """
     This function contains the main user interface and logic for the Streamlit app.
     """
-    st.title("📄 ABSA PDF to CSV Converter")
+    st.title("📄 ABSA PDF to CSV Converter (AI)")
     st.markdown("""
-    **This app is specifically for converting ABSA bank statement PDFs to a clean CSV file.**
+    **This app is specifically for converting ABSA bank statement PDFs to a clean CSV file using a highly-tuned AI parser.**
     
-    This tool is designed to handle the unique formatting of ABSA statements using a robust, rule-based parser.
+    This tool is designed to handle the unique formatting of ABSA statements with a robust AI.
     """)
 
     # File uploader widget to let the user upload multiple PDFs.
@@ -104,7 +172,7 @@ def main():
                         st.info(f"Processing transactions from: {uploaded_file.name}")
                         
                         # Call the ABSA-specific parser.
-                        transactions = parse_absa_pdf(full_text)
+                        transactions = process_with_ai(full_text)
                         all_transactions.extend(transactions)
 
                     except Exception as e:
