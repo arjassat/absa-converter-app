@@ -1,4 +1,4 @@
-# absa_strict_ai_app.py
+# absa_hardcoded_ai_app.py
 
 # Import necessary libraries. We'll use Streamlit for the app interface,
 # pandas to create the CSV, and PyMuPDF to read the PDF.
@@ -91,8 +91,10 @@ def process_with_ai(pdf_text):
     # This URL is the entry point for the AI model.
     api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
     
-    # The API key is now set as an empty string. The runtime environment will provide it.
-    api_key = ""
+    # WARNING: This API key is hardcoded. This is not a secure practice for a public app.
+    # It is included here to bypass your local configuration issues.
+    # For a real application, you should use Streamlit's secrets management.
+    api_key = "AIzaSyCKIK1BgNBXMVxDxheCrTLsrKOAq2KSRv8"
 
     try:
         # We'll now use the standard requests library which works reliably with Streamlit.
@@ -205,3 +207,4 @@ def main():
 # Run the main function when the script is executed.
 if __name__ == "__main__":
     main()
+
