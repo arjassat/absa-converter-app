@@ -17,40 +17,38 @@ def parse_absa_pdf(pdf_text):
     Parses transactions from ABSA PDFs using a robust, multi-line regular expression.
     This is designed to handle the highly inconsistent formatting of this specific PDF.
     """
-    st.info("Using multi-line rule-based parser for ABSA file.")
+    st.info("Using simplified rule-based parser for ABSA file.")
     transactions = []
     
     # This pattern is more forgiving and looks for a transaction across multiple lines.
-    # The re.DOTALL flag is crucial to make '.' match newlines.
-    absa_pattern_multiline = re.compile(
-        r'(\d{1,2}/\d{1,2}/\d{4})\s' # Date
-        r'(.*?)' # Non-greedy description, including newlines
-        r'([\d\s,.-]+)\s*$' # Matches the amount at the end of a block
+    # The re.DOTALL and re.MULTILINE flags are crucial to make '.' and '^' match newlines.
+    # We look for a date at the beginning of a line, a description, and then a
+    # debit amount and/or a credit amount.
+    absa_pattern = re.compile(
+        r'^\s*(\d{1,2}/\d{1,2}/\d{4})\s' # Date at the start of a line
+        r'(.+?)' # Description, non-greedy
+        r'(\s*[\d\s,.-]+)?' # Optional debit amount
+        r'(\s*[\d\s,.-]+)\s*$' # Final amount at the end of the line
+        , re.MULTILINE | re.DOTALL
     )
     
-    # Clean the entire text block first.
-    # The original PDF has many line breaks that mess up the extraction.
-    cleaned_text = re.sub(r'[\r\n]+', ' ', pdf_text)
-
-    # Re-introduce newlines in a more consistent way to define transaction blocks.
-    # This is a guess based on the PDF's layout where a balance often signals a new line.
-    cleaned_text = re.sub(r'(\s\d{1,3}(,\d{3})*(\.\d{2}))', r'\n\1', cleaned_text)
-    
-    # Now, try to match the pattern on the cleaned text.
-    matches = absa_pattern_multiline.findall(cleaned_text)
+    # Now, try to find all matches on the entire PDF text.
+    matches = absa_pattern.findall(pdf_text)
 
     for match in matches:
         try:
             date_str = match[0].strip()
             description = match[1].strip()
-            amount_str = match[2].strip()
-
-            amount = float(amount_str.replace(" ", "").replace(",", "").replace("-", ""))
+            debit_str = match[2].strip() if match[2] else None
+            credit_str = match[3].strip() if match[3] else None
             
-            # Since the amounts are in separate columns, we need to determine the sign.
-            # We look for keywords like "Debit" or "Charge" to identify negative amounts.
-            if "Debit Amount" in cleaned_text or "Charge" in description or "-" in amount_str:
-                 amount = -abs(amount)
+            amount = 0.0
+            if credit_str:
+                amount = float(credit_str.replace(" ", "").replace(",", ""))
+            elif debit_str:
+                amount = -abs(float(debit_str.replace(" ", "").replace(",", "")))
+            else:
+                continue
             
             transactions.append({
                 "date": pd.to_datetime(date_str, format="%d/%m/%Y").strftime("%Y-%m-%d"),
@@ -60,7 +58,7 @@ def parse_absa_pdf(pdf_text):
         except (ValueError, IndexError):
             continue
 
-    st.success(f"Found {len(transactions)} transactions with enhanced rule-based parser.")
+    st.success(f"Found {len(transactions)} transactions with simplified rule-based parser.")
     return transactions
 
 # --- Main App UI Layout ---
@@ -140,5 +138,6 @@ def main():
 # Run the main function when the script is executed.
 if __name__ == "__main__":
     main()
+
 
 
